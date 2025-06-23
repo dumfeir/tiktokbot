@@ -6,31 +6,43 @@ from keep_alive import keep_alive
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# استخراج ID الفيديو من رابط التيك توك
+# ✅ استخراج ID الفيديو من رابط TikTok الكامل
 def extract_id(url):
     try:
-        video_id = url.split("/video/")[1].split("?")[0]
-        return video_id
+        if "/video/" in url:
+            return url.split("/video/")[1].split("?")[0]
     except:
         return None
+
+# ✅ حل الروابط المختصرة (مثل vt.tiktok.com) إلى رابط كامل
+def resolve_redirect(url):
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=5)
+        return response.url
+    except:
+        return url
 
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
 
     if "tiktok.com" not in url:
-        await update.message.reply_text("❌ أرسل رابط TikTok صالح.")
+        await update.message.reply_text("❌ أرسل رابط TikTok صحيح.")
         return
 
     await update.message.chat.send_action("upload_video")
 
     try:
-        video_id = extract_id(url)
+        # ✅ حل الرابط إذا كان مختصرًا
+        final_url = resolve_redirect(url)
+
+        # ✅ استخراج ID الفيديو
+        video_id = extract_id(final_url)
         if not video_id:
             await update.message.reply_text("❌ لم أتمكن من استخراج الفيديو.")
             return
 
-        # TikMate API: الحصول على رابط التنزيل
-        api_url = f"https://tikmate.online/api/lookup?url={url}"
+        # ✅ طلب TikMate للحصول على رابط التنزيل
+        api_url = f"https://tikmate.online/api/lookup?url={final_url}"
         response = requests.get(api_url).json()
 
         if 'token' not in response:
@@ -45,11 +57,11 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open("video.mp4", "wb") as f:
             f.write(video_data)
 
-        await update.message.reply_video(video=open("video.mp4", "rb"), caption="✅ تم التنزيل بدون علامة مائية.")
+        await update.message.reply_video(video=open("video.mp4", "rb"), caption="✅ تم التنزيل بدون علامة مائية!")
         os.remove("video.mp4")
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ خطأ أثناء التنزيل: {e}")
+        await update.message.reply_text(f"⚠️ حدث خطأ أثناء التنزيل: {e}")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
