@@ -6,34 +6,40 @@ from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filte
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-class InstagramDownloader:
+class AdvancedInstaDownloader:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://www.instagram.com/'
         }
-        self.api_providers = [
+        self.APIS = [
+            self._try_ddinstagram,
             self._try_savefrom,
-            self._try_igram,
             self._try_snapinsta
         ]
 
-    def _extract_reel_url(self, text):
-        """استخراج رابط الريل من النص مع تصحيح الأخطاء"""
-        # تصحيح الأخطاء الشائعة (feel → reel)
-        text = re.sub(r'/f[eE]{2}l/', '/reel/', text, flags=re.IGNORECASE)
-        # إزالة المسافات بين أجزاء الرابط
-        text = re.sub(r'(\S+)\s+(\S+)', r'\1\2', text)
-        # استخراج الرابط
-        url_match = re.search(
-            r'(https?://(?:www\.)?instagram\.com/reel/[a-zA-Z0-9_-]+/?\??[^\s]*)',
-            text
-        )
-        return url_match.group(0) if url_match else None
+    def _fix_url(self, text):
+        """إصلاح جميع مشاكل الروابط"""
+        # إزالة المسافات والأخطاء الإملائية
+        text = re.sub(r'(https?://[^\s]+)\s+([^\s]+)', r'\1\2', text)
+        # تصحيح reel/feel/reeI إلى reel
+        text = re.sub(r'/(f[eE]{2}l|ree[iI]|ree[lL])', '/reel', text, flags=re.IGNORECASE)
+        # استخراج الرابط النهائي
+        match = re.search(r'(https?://(?:www\.)?instagram\.com/reel/[a-zA-Z0-9_-]+(?:/\?[^\s]*)?)', text)
+        return match.group(0) if match else None
+
+    def _try_ddinstagram(self, url):
+        """أفضل طريقة تعمل حالياً"""
+        try:
+            dd_url = url.replace('instagram.com', 'ddinstagram.com')
+            response = self.session.head(dd_url, allow_redirects=True, timeout=10)
+            return response.url if 'video' in response.url else None
+        except:
+            return None
 
     def _try_savefrom(self, url):
-        """استخدام savefrom.net API"""
+        """الخيار الثاني"""
         try:
             api_url = "https://api.savefrom.net/api/convert"
             params = {'url': url, 'format': 'mp4'}
@@ -42,18 +48,8 @@ class InstagramDownloader:
         except:
             return None
 
-    def _try_igram(self, url):
-        """استخدام igram.world API"""
-        try:
-            api_url = "https://igram.world/api/dl"
-            data = {'url': url}
-            response = self.session.post(api_url, data=data, timeout=15).json()
-            return response.get('url')
-        except:
-            return None
-
     def _try_snapinsta(self, url):
-        """استخدام snapinsta.app API"""
+        """الخيار الثالث"""
         try:
             api_url = "https://snapinsta.app/api/ajaxSearch"
             data = {'q': url}
@@ -62,23 +58,23 @@ class InstagramDownloader:
         except:
             return None
 
-    def download_reel(self, text):
-        """التحميل باستخدام أفضل API متاح"""
-        url = self._extract_reel_url(text)
+    def download(self, text):
+        """المحاولة مع جميع الواجهات"""
+        url = self._fix_url(text)
         if not url:
-            return None, "⚠️ لم يتم التعرف على رابط الريل الصحيح"
+            return None, "⚠️ لم أتمكن من تحديد رابط الريل الصحيح"
 
-        for api in self.api_providers:
+        for api in self.APIS:
             video_url = api(url)
             if video_url:
                 return video_url, None
         
-        return None, "❌ جميع الخوادم مشغولة حالياً، حاول لاحقاً"
+        return None, "❌ جميع الخوادم مشغولة، حاول لاحقاً أو أرسل رابطاً مختلفاً"
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    downloader = InstagramDownloader()
+    downloader = AdvancedInstaDownloader()
     
-    video_url, error_msg = downloader.download_reel(update.message.text)
+    video_url, error_msg = downloader.download(update.message.text)
     
     if error_msg:
         await update.message.reply_text(error_msg)
@@ -89,18 +85,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = downloader.session.get(video_url, stream=True, timeout=30)
         if response.status_code != 200:
-            await update.message.reply_text("❌ فشل تحميل الفيديو")
+            await update.message.reply_text("❌ فشل تحميل الفيديو من الخادم")
             return
 
         await update.message.reply_video(
             video=response.raw,
-            caption="✅ تم التحميل بنجاح من Instagram",
+            caption="🎉 تم التحميل بنجاح!",
             supports_streaming=True,
             filename="instagram_reel.mp4"
         )
     except Exception as e:
         print(f"Error: {e}")
-        await update.message.reply_text("⛔ حدث خطأ أثناء التحميل")
+        await update.message.reply_text("⛔ حدث خطأ غير متوقع")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
@@ -108,5 +104,5 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ البوت يعمل (متخصص في Instagram Reels)...")
+    print("🚀 البوت يعمل بكل كفاءة...")
     app.run_polling()
