@@ -13,66 +13,94 @@ class InstagramDownloader:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://www.instagram.com/'
         }
+        self.api_providers = [
+            self._try_savefrom,
+            self._try_igram,
+            self._try_snapinsta
+        ]
 
-    def fix_url(self, text):
-        """إصلاح الروابط المقطوعة والأخطاء الإملائية"""
-        # تصحيح reeI → reel
-        text = re.sub(r'/ree[iI|lL]', '/reel', text, flags=re.IGNORECASE)
-        # جمع الروابط المقطوعة
+    def _extract_reel_url(self, text):
+        """استخراج رابط الريل من النص مع تصحيح الأخطاء"""
+        # تصحيح الأخطاء الشائعة (feel → reel)
+        text = re.sub(r'/f[eE]{2}l/', '/reel/', text, flags=re.IGNORECASE)
+        # إزالة المسافات بين أجزاء الرابط
         text = re.sub(r'(\S+)\s+(\S+)', r'\1\2', text)
-        # استخراج الرابط فقط
-        url_match = re.search(r'(https?://[^\s]+)', text)
-        return url_match.group(1) if url_match else None
+        # استخراج الرابط
+        url_match = re.search(
+            r'(https?://(?:www\.)?instagram\.com/reel/[a-zA-Z0-9_-]+/?\??[^\s]*)',
+            text
+        )
+        return url_match.group(0) if url_match else None
 
-    def is_instagram_reel(self, url):
-        """التأكد من أن الرابط لريل انستغرام"""
-        return url and re.search(r'instagram\.com/reel', url, re.IGNORECASE)
-
-    def download_reel(self, url):
-        """تحميل الريل باستخدام api.savefrom.net"""
+    def _try_savefrom(self, url):
+        """استخدام savefrom.net API"""
         try:
             api_url = "https://api.savefrom.net/api/convert"
             params = {'url': url, 'format': 'mp4'}
             response = self.session.get(api_url, params=params, timeout=15).json()
             return response.get('url')
-        except Exception as e:
-            print(f"Instagram Download Error: {e}")
+        except:
             return None
 
+    def _try_igram(self, url):
+        """استخدام igram.world API"""
+        try:
+            api_url = "https://igram.world/api/dl"
+            data = {'url': url}
+            response = self.session.post(api_url, data=data, timeout=15).json()
+            return response.get('url')
+        except:
+            return None
+
+    def _try_snapinsta(self, url):
+        """استخدام snapinsta.app API"""
+        try:
+            api_url = "https://snapinsta.app/api/ajaxSearch"
+            data = {'q': url}
+            response = self.session.post(api_url, data=data, timeout=15).json()
+            return response.get('links', [{}])[0].get('url')
+        except:
+            return None
+
+    def download_reel(self, text):
+        """التحميل باستخدام أفضل API متاح"""
+        url = self._extract_reel_url(text)
+        if not url:
+            return None, "⚠️ لم يتم التعرف على رابط الريل الصحيح"
+
+        for api in self.api_providers:
+            video_url = api(url)
+            if video_url:
+                return video_url, None
+        
+        return None, "❌ جميع الخوادم مشغولة حالياً، حاول لاحقاً"
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raw_text = update.message.text
     downloader = InstagramDownloader()
     
-    # إصلاح الرابط
-    fixed_url = downloader.fix_url(raw_text)
+    video_url, error_msg = downloader.download_reel(update.message.text)
     
-    if not fixed_url or not downloader.is_instagram_reel(fixed_url):
-        await update.message.reply_text("⚠️ يرجى إرسال رابط Instagram Reel صحيح")
+    if error_msg:
+        await update.message.reply_text(error_msg)
         return
 
     await update.message.chat.send_action("upload_video")
 
-    video_url = downloader.download_reel(fixed_url)
-    
-    if not video_url:
-        await update.message.reply_text("❌ تعذر تحميل الريل. جرب رابطًا آخر.")
-        return
-
     try:
         response = downloader.session.get(video_url, stream=True, timeout=30)
         if response.status_code != 200:
-            await update.message.reply_text("❌ فشل تحميل الفيديو من الخادم")
+            await update.message.reply_text("❌ فشل تحميل الفيديو")
             return
 
         await update.message.reply_video(
             video=response.raw,
-            caption="✅ تم التحميل من Instagram",
+            caption="✅ تم التحميل بنجاح من Instagram",
             supports_streaming=True,
-            filename="reel.mp4"
+            filename="instagram_reel.mp4"
         )
     except Exception as e:
         print(f"Error: {e}")
-        await update.message.reply_text("⛔ حدث خطأ غير متوقع")
+        await update.message.reply_text("⛔ حدث خطأ أثناء التحميل")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
