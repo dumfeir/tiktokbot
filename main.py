@@ -6,7 +6,7 @@ from keep_alive import keep_alive
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-class TikTokHandler:
+class TikTokDownloader:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers = {
@@ -14,48 +14,73 @@ class TikTokHandler:
             'Referer': 'https://www.tiktok.com/'
         }
 
-    def get_no_watermark(self, url):
-        """الحصول على رابط بدون علامة مائية باستخدام api.tikmate.cc"""
-        try:
-            # أولاً: حل الرابط المختصر
-            resolved_url = self.session.head(url, allow_redirects=True, timeout=10).url
-            
-            # ثانياً: استخدام API موثوق
-            api_url = "https://api.tikmate.cc/api/download"
-            params = {
-                'url': resolved_url,
-                'token': 'null'  # بعض الخوادم تتطلب هذا
-            }
-            
-            response = self.session.get(api_url, params=params, timeout=15).json()
-            
-            if response.get('video_no_watermark'):
-                return response['video_no_watermark']
-            return None
-            
-        except Exception as e:
-            print(f"API Error: {e}")
-            return None
+    def try_apis(self, url):
+        """تجربة عدة واجهات برمجة تطبيقات لإزالة العلامة المائية"""
+        apis = [
+            self._try_tikmate_api,
+            self._try_tiklydown_api,
+            self._try_ttdownloader_api,
+            self._try_snaptik_api,
+            self._try_tikwm_api
+        ]
+        
+        for api in apis:
+            try:
+                result = api(url)
+                if result:
+                    return result
+            except Exception as e:
+                print(f"Error with API: {e}")
+        return None
+
+    def _try_tikmate_api(self, url):
+        api_url = "https://api.tikmate.app/api/download"
+        params = {'url': url}
+        response = self.session.get(api_url, params=params, timeout=10).json()
+        return response.get('video_no_watermark')
+
+    def _try_tiklydown_api(self, url):
+        api_url = "https://api.tiklydown.eu.org/api/download"
+        payload = {'url': url}
+        response = self.session.post(api_url, json=payload, timeout=10).json()
+        return response.get('video', {}).get('url')
+
+    def _try_ttdownloader_api(self, url):
+        api_url = "https://ttdownloader.com/req/"
+        data = {'url': url}
+        response = self.session.post(api_url, data=data, timeout=10).json()
+        return response.get('video_no_watermark')
+
+    def _try_snaptik_api(self, url):
+        api_url = "https://snaptik.app/api/v1/get-video"
+        data = {'url': url}
+        response = self.session.post(api_url, data=data, timeout=10).json()
+        return response.get('data', {}).get('play')
+
+    def _try_tikwm_api(self, url):
+        api_url = "https://www.tikwm.com/api/"
+        data = {'url': url}
+        response = self.session.post(api_url, data=data, timeout=10).json()
+        return response.get('data', {}).get('play')
 
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    handler = TikTokHandler()
+    downloader = TikTokDownloader()
 
-    if "tiktok.com" not in url:
+    if not any(x in url for x in ['tiktok.com', 'vt.tiktok', 'vm.tiktok']):
         await update.message.reply_text("❌ يرجى إرسال رابط TikTok صحيح")
         return
 
     await update.message.chat.send_action("upload_video")
 
     try:
-        video_url = handler.get_no_watermark(url)
+        video_url = downloader.try_apis(url)
         
         if not video_url:
             await update.message.reply_text("❌ تعذر إزالة العلامة المائية. جرب رابطًا آخر أو حاول لاحقًا.")
             return
 
-        # تنزيل الفيديو مباشرة
-        response = handler.session.get(video_url, stream=True, timeout=30)
+        response = downloader.session.get(video_url, stream=True, timeout=30)
         
         if response.status_code != 200:
             await update.message.reply_text("❌ فشل تنزيل الفيديو")
@@ -64,12 +89,13 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_video(
             video=response.raw,
             caption="✅ تم التنزيل بدون علامة مائية",
-            supports_streaming=True
+            supports_streaming=True,
+            filename="tiktok_video.mp4"
         )
 
     except Exception as e:
         print(f"Error: {e}")
-        await update.message.reply_text("⚠️ حدث خطأ. جرب مرة أخرى أو أرسل رابطًا مختلفًا.")
+        await update.message.reply_text("⚠️ حدث خطأ غير متوقع. يرجى المحاولة لاحقًا.")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
