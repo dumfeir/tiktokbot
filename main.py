@@ -4,26 +4,25 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 from keep_alive import keep_alive
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ✅ تحسين دالة استخراج ID الفيديو
-def extract_id(url):
+# دالة محسنة لاستخراج ID الفيديو
+def extract_video_id(url):
     try:
-        # تحقق من أن الرابط من TikTok أولاً
-        parsed = urlparse(url)
-        if "tiktok.com" not in parsed.netloc:
-            return None
-            
-        # حل أي روابط مختصرة
+        # حل أي روابط مختصرة أولاً
         final_url = resolve_redirect(url)
         
-        # نمط regex لاكتشاف معرف الفيديو في مختلف تنسيقات الروابط
+        # التحقق من أن الرابط من تيك توك
+        if "tiktok.com" not in final_url:
+            return None
+            
+        # الأنماط الشائعة لروابط تيك توك
         patterns = [
             r"/video/(\d+)",  # الروابط العادية
-            r"@[\w.]+/video/(\d+)",  # روابط مع اسم مستخدم
-            r"/(\d+)(?:\.html|\?|$)",  # روابط رقمية فقط
+            r"@[\w.]+/video/(\d+)",  # روابط مع @username
+            r"/(\d+)(?:\?|$)",  # الروابط الرقمية فقط
             r"item_id=(\d+)"  # روابط معلمة
         ]
         
@@ -32,66 +31,98 @@ def extract_id(url):
             if match:
                 return match.group(1)
                 
+        # إذا لم ينجح أي من الأنماط السابقة، جرب استخراج من query parameters
+        parsed = urlparse(final_url)
+        params = parse_qs(parsed.query)
+        if 'item_id' in params:
+            return params['item_id'][0]
+            
         return None
-    except:
+    except Exception as e:
+        print(f"Error extracting video ID: {e}")
         return None
 
-# ✅ حل الروابط المختصرة
+# دالة محسنة لحل الروابط المختصرة
 def resolve_redirect(url):
     try:
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
             
-        response = requests.head(url, allow_redirects=True, timeout=5)
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        response = session.head(url, allow_redirects=True, timeout=10)
         return response.url
-    except:
+    except Exception as e:
+        print(f"Error resolving URL: {e}")
         return url
 
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
 
-    if "tiktok.com" not in url:
-        await update.message.reply_text("❌ أرسل رابط TikTok صحيح.")
+    if not any(domain in url for domain in ['tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com']):
+        await update.message.reply_text("❌ الرابط غير صحيح. يرجى إرسال رابط TikTok فقط.")
         return
 
     await update.message.chat.send_action("upload_video")
 
     try:
-        # ✅ حل الرابط إذا كان مختصرًا
+        # حل الرابط المختصر
         final_url = resolve_redirect(url)
+        print(f"Final URL: {final_url}")  # لأغراض debugging
 
-        # ✅ استخراج ID الفيديو
-        video_id = extract_id(final_url)
-        if not video_id:
-            await update.message.reply_text("❌ لم أتمكن من استخراج الفيديو. الرابط غير صحيح أو غير مدعوم.")
-            return
-
-        # ✅ استخدام API مختلف أكثر موثوقية
-        api_url = f"https://api.tiklydown.eu.org/api/info?url={final_url}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0'
+        # استخدام API موثوق
+        api_url = "https://api.tiklydown.eu.org/api/download"
+        payload = {
+            "url": final_url
         }
-        response = requests.get(api_url, headers=headers).json()
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/json"
+        }
 
-        if not response.get('success') or not response.get('video'):
-            await update.message.reply_text("❌ تعذر الحصول على الفيديو من الخدمة.")
+        response = requests.post(api_url, json=payload, headers=headers)
+        
+        # تحقق من أن الرد يحتوي على JSON صالح
+        try:
+            data = response.json()
+        except ValueError:
+            await update.message.reply_text("❌ حصلت على رد غير متوقع من الخادم. يرجى المحاولة لاحقاً.")
             return
 
-        download_url = response['video']['download_url']
-        video_data = requests.get(download_url, headers=headers).content
+        if not data.get("success"):
+            error_msg = data.get("message", "تعذر الحصول على الفيديو")
+            await update.message.reply_text(f"❌ {error_msg}")
+            return
 
-        with open("video.mp4", "wb") as f:
-            f.write(video_data)
+        video_url = data["video"]["url"]
+        video_response = requests.get(video_url, stream=True, headers=headers)
+        
+        if video_response.status_code != 200:
+            await update.message.reply_text("❌ تعذر تنزيل الفيديو")
+            return
 
+        # حفظ الفيديو مؤقتاً
+        temp_file = "temp_video.mp4"
+        with open(temp_file, "wb") as f:
+            for chunk in video_response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        # إرسال الفيديو
         await update.message.reply_video(
-            video=open("video.mp4", "rb"),
-            caption="✅ تم التنزيل بدون علامة مائية!",
+            video=open(temp_file, "rb"),
+            caption="✅ تم التنزيل بنجاح!",
             supports_streaming=True
         )
-        os.remove("video.mp4")
+
+        # حذف الملف المؤقت
+        os.remove(temp_file)
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ حدث خطأ أثناء التنزيل: {str(e)}")
+        error_msg = f"⚠️ حدث خطأ: {str(e)}"
+        print(error_msg)  # لأغراض debugging
+        await update.message.reply_text("❌ حدث خطأ أثناء معالجة طلبك. يرجى المحاولة لاحقاً.")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
