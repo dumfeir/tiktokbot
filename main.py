@@ -6,7 +6,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filte
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-class SocialDownloader:
+class InstagramDownloader:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers = {
@@ -14,61 +14,61 @@ class SocialDownloader:
             'Referer': 'https://www.instagram.com/'
         }
 
-    def fix_broken_url(self, text):
-        """إصلاح الروابط المقطوعة وتصحيح الأخطاء الإملائية"""
-        # تصحيح reei → reel
-        text = re.sub(r'/ree[iI]', '/reel', text, flags=re.IGNORECASE)
+    def fix_url(self, text):
+        """إصلاح الروابط المقطوعة والأخطاء الإملائية"""
+        # تصحيح reeI → reel
+        text = re.sub(r'/ree[iI|lL]', '/reel', text, flags=re.IGNORECASE)
         # جمع الروابط المقطوعة
         text = re.sub(r'(\S+)\s+(\S+)', r'\1\2', text)
-        return text.strip()
+        # استخراج الرابط فقط
+        url_match = re.search(r'(https?://[^\s]+)', text)
+        return url_match.group(1) if url_match else None
 
-    def is_instagram(self, url):
-        """كشف روابط انستغرام مع تحمل الأخطاء الإملائية"""
-        return bool(re.search(r'instagram\.com/ree[lL]', url, re.IGNORECASE))
+    def is_instagram_reel(self, url):
+        """التأكد من أن الرابط لريل انستغرام"""
+        return url and re.search(r'instagram\.com/reel', url, re.IGNORECASE)
 
-    def download_instagram(self, url):
-        """تحميل من انستغرام باستخدام api.savefrom.net"""
+    def download_reel(self, url):
+        """تحميل الريل باستخدام api.savefrom.net"""
         try:
             api_url = "https://api.savefrom.net/api/convert"
-            params = {
-                'url': url,
-                'format': 'mp4'
-            }
+            params = {'url': url, 'format': 'mp4'}
             response = self.session.get(api_url, params=params, timeout=15).json()
             return response.get('url')
         except Exception as e:
-            print(f"Instagram Error: {e}")
+            print(f"Instagram Download Error: {e}")
             return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = update.message.text
-    downloader = SocialDownloader()
+    downloader = InstagramDownloader()
     
     # إصلاح الرابط
-    fixed_url = downloader.fix_broken_url(raw_text)
+    fixed_url = downloader.fix_url(raw_text)
     
-    if not downloader.is_instagram(fixed_url):
+    if not fixed_url or not downloader.is_instagram_reel(fixed_url):
         await update.message.reply_text("⚠️ يرجى إرسال رابط Instagram Reel صحيح")
         return
 
     await update.message.chat.send_action("upload_video")
 
-    video_url = downloader.download_instagram(fixed_url)
+    video_url = downloader.download_reel(fixed_url)
     
     if not video_url:
-        await update.message.reply_text("❌ تعذر تحميل الريل. جرب رابطًا آخر أو حاول لاحقًا.")
+        await update.message.reply_text("❌ تعذر تحميل الريل. جرب رابطًا آخر.")
         return
 
     try:
         response = downloader.session.get(video_url, stream=True, timeout=30)
         if response.status_code != 200:
-            await update.message.reply_text("❌ فشل تحميل الفيديو")
+            await update.message.reply_text("❌ فشل تحميل الفيديو من الخادم")
             return
 
         await update.message.reply_video(
             video=response.raw,
             caption="✅ تم التحميل من Instagram",
-            supports_streaming=True
+            supports_streaming=True,
+            filename="reel.mp4"
         )
     except Exception as e:
         print(f"Error: {e}")
@@ -80,5 +80,5 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ البوت يعمل...")
+    print("✅ البوت يعمل (متخصص في Instagram Reels)...")
     app.run_polling()
